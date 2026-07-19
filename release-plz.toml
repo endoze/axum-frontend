@@ -1,0 +1,11 @@
+[workspace]
+# release-plz publishes to crates.io and pushes the git tag, but the GitHub
+# Release is created by cargo-dist (see .github/workflows/release.yml). Disable
+# release-plz's own GitHub release so the two tools don't race to create the
+# same release for a tag.
+git_release_enable = false
+
+# cargo-dist can only "announce" a library (no binaries) when given an explicit,
+# name-prefixed tag. Emit exactly that tag here so release.yml can pass
+# github.ref_name straight to `dist host --tag=...`.
+git_tag_name = "{{ package }}-v{{ version }}"
