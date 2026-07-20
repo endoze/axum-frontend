@@ -1,6 +1,6 @@
 [package]
 name = "axum-frontend"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Serve a Vite frontend from axum: embed the built SPA in the binary, serve it from a directory, or spawn and reverse-proxy the dev server."
 authors = ["Endoze <endoze@endozemedia.com>"]
