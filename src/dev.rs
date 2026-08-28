@@ -6,6 +6,7 @@ use axum::Router;
 use axum_reverse_proxy::ReverseProxy;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::process::ExitStatus;
 use std::time::Duration;
 use tokio::process::{Child, Command};
 
@@ -118,14 +119,91 @@ async fn wait_for_startup(
     return Ok(());
   }
 
-  Err(match exit {
+  Err(startup_error(host, port, exit).await)
+}
+
+/// Describe a failed startup, naming a port that is already taken rather than
+/// blaming the child that just died over it.
+///
+/// A dev server orphaned by an earlier run keeps holding the port, and the next
+/// run's dev server exits because it can't bind it. Reporting only the exit
+/// points at the process that died instead of at the one that never went away,
+/// which is the thing that has to be killed to get moving again.
+async fn startup_error(host: &str, port: u16, exit: std::io::Result<ExitStatus>) -> std::io::Error {
+  if port_is_taken(host, port).await {
+    return std::io::Error::new(
+      std::io::ErrorKind::AddrInUse,
+      format!(
+        "dev server exited before becoming ready: {host}:{port} is already in use, \
+         possibly by a dev server orphaned by an earlier run (see `shutdown_requested`)"
+      ),
+    );
+  }
+
+  match exit {
     Ok(status) => {
       std::io::Error::other(format!("dev server exited before becoming ready: {status}"))
     }
     Err(e) => std::io::Error::other(format!(
       "dev server exited before becoming ready, and waiting on it failed: {e}"
     )),
-  })
+  }
+}
+
+/// Whether something else already holds `host:port`.
+///
+/// Binding is the only question that answers this: the readiness probe connects,
+/// and a connect failure is equally consistent with an empty port and with one
+/// that is bound but not accepting.
+async fn port_is_taken(host: &str, port: u16) -> bool {
+  match tokio::net::TcpListener::bind(format!("{host}:{port}")).await {
+    Ok(_) => false,
+    Err(e) => e.kind() == std::io::ErrorKind::AddrInUse,
+  }
+}
+
+/// Resolve when the process is asked to stop: `SIGINT` or `SIGTERM` on Unix,
+/// whichever arrives first, and Ctrl-C elsewhere.
+///
+/// [`DevServer`] cleans up when it is dropped, and a process killed by a signal
+/// runs no destructors, so something has to turn the signal into a normal return
+/// from `main`. Race this against your server:
+///
+/// ```rust,ignore
+/// tokio::select! {
+///   result = axum::serve(listener, app) => result?,
+///   () = axum_frontend::shutdown_requested() => {}
+/// }
+/// ```
+///
+/// A race rather than `axum::serve(..).with_graceful_shutdown(..)`: graceful
+/// shutdown drains open connections first, and Vite's HMR WebSocket stays open
+/// for as long as a browser tab has the page on screen, so draining turns Ctrl-C
+/// into a hang for exactly the workflow dev mode exists to serve.
+///
+/// If registering the `SIGTERM` handler fails, this waits on Ctrl-C alone.
+/// Handling one signal is worth more here than refusing to handle either.
+pub async fn shutdown_requested() {
+  #[cfg(unix)]
+  {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let Ok(mut terminate) = signal(SignalKind::terminate()) else {
+      let _ = tokio::signal::ctrl_c().await;
+
+      return;
+    };
+
+    tokio::select! {
+      _ = tokio::signal::ctrl_c() => {}
+      _ = terminate.recv() => {}
+    }
+  }
+
+  #[cfg(not(unix))]
+  {
+    let _ = tokio::signal::ctrl_c().await;
+  }
 }
 
 /// Whether to inject a dev tool's host/port flags into the spawn command.
@@ -264,6 +342,10 @@ impl DevConfig {
   /// than orphaned; the group gets a `SIGTERM` and a short grace period before
   /// being `SIGKILL`ed (see [`DevServer`]).
   ///
+  /// That cleanup only happens if the host process lives long enough to drop the
+  /// guard, which a process killed by `SIGINT` or `SIGTERM` does not: see
+  /// [`DevServer`] and [`shutdown_requested`].
+  ///
   /// The child's stdin is `/dev/null`. It runs in a background process group, so
   /// it could never usefully read the terminal anyway, and the interactive
   /// machinery in these toolchains is gated on `isatty` (Vite's CLI shortcuts,
@@ -277,6 +359,10 @@ impl DevConfig {
   /// example, the program is not found), if the child exits before the port
   /// accepts connections, or if the dev server does not accept connections
   /// before the readiness timeout (see [`DevConfig::ready_timeout`]).
+  ///
+  /// A child that exits over a port someone else holds is reported as
+  /// [`std::io::ErrorKind::AddrInUse`], since the usual cause is a dev server
+  /// orphaned by an earlier run rather than anything wrong with this one.
   pub async fn spawn(self) -> std::io::Result<DevServer> {
     let argv = self.command_line();
     let (program, args) = argv
@@ -352,6 +438,28 @@ impl DevConfig {
 /// run its cleanup. `SIGKILL` is uncatchable, so killing outright skips that
 /// cleanup entirely, and anything the tool restores on shutdown (terminal modes
 /// among them) is left as it was.
+///
+/// # The host has to reach the drop
+///
+/// Cleanup on drop is only as reachable as the drop itself, and a process killed
+/// by a signal runs no destructors. A host that leaves `SIGINT` and `SIGTERM` on
+/// their default disposition therefore dies without dropping this guard, and the
+/// dev server survives, reparented to init and still holding its port. Ctrl-C
+/// doesn't reach the dev server either: it runs in its own process group,
+/// deliberately, so the group kill can reap grandchildren without touching the
+/// caller's own shell and cargo, and that group is not the terminal's foreground
+/// one. Killing it is entirely this guard's job.
+///
+/// So the host has to handle both signals. Race [`shutdown_requested`] against
+/// your server, which returns from `main` normally and drops the guard on the way
+/// out.
+///
+/// `SIGKILL` to the host is the case none of this covers, and nothing the parent
+/// can do would: it dies without running anything, and the dev server is
+/// orphaned. Reaping it would take a watchdog inside the child holding a pipe to
+/// the parent and exiting on EOF, which neither pnpm nor Vite will do. Clear it
+/// by hand if it happens; the next [`DevConfig::spawn`] reports the port it is
+/// still holding.
 #[derive(Debug)]
 pub struct DevServer {
   child: Child,
@@ -514,5 +622,52 @@ mod tests {
       .command_line();
 
     assert_eq!(argv, vec!["npm", "run", "dev"]);
+  }
+
+  /// The whole point of the busy-port branch: an orphan from an earlier run
+  /// holds the port, this run's dev server exits over it, and reporting only the
+  /// exit sends the reader after the wrong process.
+  #[tokio::test]
+  async fn startup_error_names_a_port_someone_else_holds() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let error = startup_error("127.0.0.1", port, Err(std::io::Error::other("unused"))).await;
+
+    assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+
+    let message = error.to_string();
+
+    assert!(message.contains("already in use"), "{message}");
+    assert!(message.contains("orphaned"), "{message}");
+  }
+
+  /// A free port means the child really did die of its own accord, and blaming
+  /// the port instead would be its own wrong pointer.
+  #[tokio::test]
+  async fn startup_error_blames_the_child_when_the_port_is_free() {
+    let status = std::process::Command::new("sh")
+      .args(["-c", "exit 3"])
+      .status()
+      .unwrap();
+
+    // Bind then drop to obtain a very likely-free port. "Very likely" is the
+    // catch: another test binding an ephemeral port can be handed that number
+    // right back, so retry on a fresh one instead of failing the run over it.
+    for _ in 0..5 {
+      let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+      let port = listener.local_addr().unwrap().port();
+
+      drop(listener);
+
+      let error = startup_error("127.0.0.1", port, Ok(status)).await;
+
+      if error.kind() != std::io::ErrorKind::AddrInUse {
+        assert!(error.to_string().contains("exited"), "{error}");
+
+        return;
+      }
+    }
+
+    panic!("a free port should not be reported as in use, but every candidate was re-bound");
   }
 }
