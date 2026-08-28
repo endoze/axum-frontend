@@ -398,6 +398,70 @@ async fn spawn_succeeds_when_the_child_exits_but_the_port_is_open() {
   std::fs::remove_dir_all(&dir).ok();
 }
 
+/// Send `signal` (a `kill` flag such as `-INT`) to the test process itself.
+///
+/// Signalling ourselves rather than a helper process is deliberate: a background
+/// job in a non-interactive shell has `SIGINT` masked to `SIG_IGN`, and it is
+/// inherited, so a subprocess-based version of this test passes just as happily
+/// against a `shutdown_requested` that does nothing at all.
+#[cfg(unix)]
+fn signal_self(signal: &str) {
+  let status = std::process::Command::new("kill")
+    .args([signal, &std::process::id().to_string()])
+    .status()
+    .expect("kill should run");
+
+  assert!(
+    status.success(),
+    "kill {signal} on ourselves should succeed"
+  );
+}
+
+/// Both signals a dev session actually receives have to resolve the future:
+/// Ctrl-C from the terminal, and `SIGTERM` from a supervisor or an editor's stop
+/// button. Either one otherwise kills the host outright, and a host that dies
+/// without unwinding never drops its `DevServer`.
+///
+/// One test covers both because signals are process-wide: two tests raising them
+/// concurrently could each satisfy the other's waiter and both pass on one
+/// working signal.
+#[cfg(unix)]
+#[tokio::test]
+async fn shutdown_requested_resolves_on_sigint_and_sigterm() {
+  use tokio::signal::unix::{signal, SignalKind};
+
+  // Registering up front is what makes signalling ourselves survivable: until
+  // tokio installs a handler, `SIGINT`'s default disposition kills the whole test
+  // binary, and the waiter's own registration would be racing the first signal.
+  let _sigint = signal(SignalKind::interrupt()).expect("SIGINT should register");
+  let _sigterm = signal(SignalKind::terminate()).expect("SIGTERM should register");
+
+  for name in ["-INT", "-TERM"] {
+    let mut waiter = tokio::spawn(axum_frontend::shutdown_requested());
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+
+    // Tokio's signal streams only deliver what arrives after they're created, so
+    // a signal sent before the spawned task first polls is missed entirely.
+    // Re-sending is harmless now that a handler is installed, and it beats
+    // sleeping for a guess at how long the task takes to get scheduled.
+    loop {
+      signal_self(name);
+
+      if tokio::time::timeout(Duration::from_millis(200), &mut waiter)
+        .await
+        .is_ok()
+      {
+        break;
+      }
+
+      assert!(
+        std::time::Instant::now() < deadline,
+        "shutdown_requested should have resolved on {name}"
+      );
+    }
+  }
+}
+
 #[test]
 #[should_panic]
 fn dev_router_panics_on_prefix_without_leading_slash() {

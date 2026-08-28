@@ -67,7 +67,7 @@ Requires the `dev` feature.
 
 ```rust,ignore
 use axum::{routing::get, Router};
-use axum_frontend::DevConfig;
+use axum_frontend::{shutdown_requested, DevConfig};
 
 // Inside an async context:
 // Spawns `pnpm dev` in ./frontend with --host/--port pinned, and waits until
@@ -83,10 +83,45 @@ let app = Router::new()
   .route("/api/health", get(|| async { "ok" }))
   // Proxy everything else to the dev server.
   .merge(dev.router(["/"]));
+
+let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
+
+// Racing the server against the shutdown signal is what makes `dev`'s cleanup
+// reachable: a process killed by SIGINT or SIGTERM runs no destructors, so
+// without this the guard never drops and the dev server is orphaned onto init,
+// still holding port 5173.
+//
+// A race rather than `.with_graceful_shutdown(shutdown_requested())`: graceful
+// shutdown drains open connections first, and Vite's HMR WebSocket stays open
+// for as long as a browser tab has the page on screen, so draining turns Ctrl-C
+// into a hang for exactly the workflow this exists to serve.
+tokio::select! {
+  result = axum::serve(listener, app) => result?,
+  () = shutdown_requested() => {}
+}
+
+// The guard has to outlive the server: dropping it is the only thing that kills
+// the dev server, so keep it in scope until serving is over.
+drop(dev);
 ```
 
 Use `DevConfig::new(["npm", "run", "dev"])` for a tool-neutral command, or
 `dev_router(prefixes, target)` directly if you manage the dev server yourself.
+
+#### Shutdown
+
+`DevServer` kills the dev server and its process group when it is dropped, so
+the host process has to live long enough to drop it. A process killed by a
+signal runs no destructors, which means handling SIGINT and SIGTERM is on you:
+`shutdown_requested()` resolves on either (Ctrl-C on non-Unix) so you can race
+it as above. Ctrl-C alone won't do it. On Unix the dev server runs in its own
+process group, deliberately, so the group kill can reap the real Vite server
+under `pnpm dev` without touching your shell and cargo, and that group is not
+the terminal's foreground one, so the terminal's Ctrl-C never reaches it.
+
+`kill -9` on the host is the one case nothing covers: it runs no cleanup at all
+and the dev server is orphaned. If a later run fails with the port already in
+use, that orphan is the likely holder.
 
 ## Inspiration
 
