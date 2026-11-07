@@ -30,11 +30,14 @@ Cargo.toml:
 [dependencies]
 axum = "0.8"
 tokio = {version = "1", features = ["full"]}
-axum-frontend = "0.1"
+axum-frontend = "0.2"
+rust-embed = "8"
 ```
 
 ### Embed the built SPA in the binary
 
+`RustEmbed` expands to paths in the `rust-embed` crate, so your crate needs it as
+a direct dependency.
 ```rust,ignore
 use axum::{routing::get, Router};
 use axum_frontend::{embed_router, RustEmbed};
@@ -60,6 +63,50 @@ let app = Router::new()
   .route("/api/health", get(|| async { "ok" }))
   .merge(static_router("dist"));
 ```
+
+A missing path with a dot in it, such as `/missing.js`, is a `404` in both modes.
+Any other path with no file behind it gets the index document, for client-side
+routing.
+
+Directory paths are client-side routes too. `/assets` gets the index document
+instead of a redirect to `/assets/`, and `docs/index.html` is not served at
+`/docs/`, so link to `/docs/index.html` if you ship pages in subdirectories.
+
+Under `.nest("/app", ...)`, axum itself answers `/app/` with a `404` before the
+request reaches these routers. Link to `/app`, or add a redirect in your app.
+
+### Routes and caching
+
+Both routers answer only `GET` and `HEAD`: any other method is a `405`. Successful
+responses get `Cache-Control: no-cache`, so browsers check for a new version
+before reusing a file, and an unchanged file answers `304`. A policy the serving
+mode already set is kept.
+
+`SpaOptions` adds two settings:
+
+```rust,no_run
+use axum::{routing::get, Router};
+use axum_frontend::{static_router_with, SpaOptions};
+
+let opts = SpaOptions::new()
+  // Every method is a 404 under these paths, so an API miss never becomes HTML.
+  .exclude(["/api"])
+  // Browsers keep these for a year without asking. Name only content-hashed files.
+  .immutable(["/assets/"]);
+
+let app = Router::new()
+  .route("/api/health", get(|| async { "ok" }))
+  .merge(static_router_with("dist", opts));
+```
+
+`SpaOptions::apply` puts the same policy in front of any `Router`, which is how
+dev mode gets it, and how it goes on the far side of a layer such as
+authentication. `dev_router` on its own forwards every method.
+
+`exclude` matches the decoded path, so `/%61pi`, `//api`, and `/api\users` count
+as `/api`. It is case-sensitive, though: on a case-insensitive filesystem, folder
+mode and debug embedded builds can still serve `/ASSETS/app.js` with `/assets`
+excluded, so use it to shape responses, not to keep files private.
 
 ### Dev mode: spawn the dev server and reverse-proxy to it
 
@@ -107,6 +154,8 @@ drop(dev);
 
 Use `DevConfig::new(["npm", "run", "dev"])` for a tool-neutral command, or
 `dev_router(prefixes, target)` directly if you manage the dev server yourself.
+Wrap the proxy with `SpaOptions::apply` for the policy above:
+`SpaOptions::new().exclude(["/api"]).apply(dev.router(["/"]))`.
 
 #### Shutdown
 
