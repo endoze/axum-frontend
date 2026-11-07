@@ -76,6 +76,7 @@ dependencies = [
  "axum",
  "axum-reverse-proxy",
  "libc",
+ "percent-encoding",
  "rust-embed",
  "tokio",
  "tower",

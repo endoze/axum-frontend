@@ -167,6 +167,66 @@ async fn dev_router_empty_prefixes_proxies_everything() {
   assert_eq!(resp.status(), StatusCode::OK);
 }
 
+/// A stub dev server: `/page` answers with no cache policy, `/cached` sets its
+/// own, and `/write` takes a POST so forwarding is visible.
+async fn stub_dev_server() -> String {
+  let upstream = Router::new()
+    .route("/page", get(|| async { "page" }))
+    .route(
+      "/cached",
+      get(|| async { ([("cache-control", "max-age=60")], "cached") }),
+    )
+    .route("/write", axum::routing::post(|| async { "written" }));
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let port = listener.local_addr().unwrap().port();
+
+  tokio::spawn(async move {
+    axum::serve(listener, upstream).await.unwrap();
+  });
+
+  axum_frontend::wait_until_ready("127.0.0.1", port, Duration::from_secs(2))
+    .await
+    .unwrap();
+
+  format!("http://127.0.0.1:{port}")
+}
+
+async fn send(router: Router, method: &str, path: &str) -> axum::response::Response {
+  let request = Request::builder()
+    .method(method)
+    .uri(path)
+    .body(Body::empty())
+    .unwrap();
+
+  router.oneshot(request).await.unwrap()
+}
+
+#[tokio::test]
+async fn dev_router_alone_still_forwards_writes() {
+  let target = stub_dev_server().await;
+  let resp = send(axum_frontend::dev_router(["/"], &target), "POST", "/write").await;
+
+  assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn the_policy_applies_to_a_proxied_dev_server() {
+  let target = stub_dev_server().await;
+  let router = axum_frontend::SpaOptions::new()
+    .exclude(["/api"])
+    .apply(axum_frontend::dev_router(["/"], &target));
+  let write = send(router.clone(), "POST", "/write").await;
+  let miss = send(router.clone(), "GET", "/api/page").await;
+  let page = send(router.clone(), "GET", "/page").await;
+  let cached = send(router, "GET", "/cached").await;
+
+  assert_eq!(write.status(), StatusCode::METHOD_NOT_ALLOWED);
+  assert_eq!(miss.status(), StatusCode::NOT_FOUND);
+  assert_eq!(page.status(), StatusCode::OK);
+  assert_eq!(page.headers()["cache-control"], "no-cache");
+  assert_eq!(cached.headers()["cache-control"], "max-age=60");
+}
+
 /// Write an executable-by-`sh` fixture script under a fresh temp directory and
 /// return `(dir, script_path)`. The caller removes `dir` when it's done.
 #[cfg(unix)]
