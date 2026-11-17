@@ -2,11 +2,11 @@
 
 #![deny(missing_docs)]
 
+use axum::Router;
 use axum::extract::{Request, State};
-use axum::http::{header, HeaderValue, Method, StatusCode};
+use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::Router;
 use percent_encoding::percent_decode_str;
 use std::sync::Arc;
 

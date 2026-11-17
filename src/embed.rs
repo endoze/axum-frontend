@@ -2,11 +2,11 @@
 
 #![deny(missing_docs)]
 
-use crate::spa::names_a_file;
 use crate::SpaOptions;
-use axum::http::{header, HeaderMap, StatusCode, Uri};
-use axum::response::{IntoResponse, Response};
+use crate::spa::names_a_file;
 use axum::Router;
+use axum::http::{HeaderMap, StatusCode, Uri, header};
+use axum::response::{IntoResponse, Response};
 use percent_encoding::percent_decode_str;
 use rust_embed::{EmbeddedFile, RustEmbed};
 use std::sync::Arc;

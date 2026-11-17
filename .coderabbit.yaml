@@ -17,6 +17,7 @@ reviews:
     - "!Cargo.lock"
     - "!target/**"
     - "!coverage/**"
+    - "!CHANGELOG.md"
   path_instructions:
     - path: "src/**/*.rs"
       instructions: |
@@ -27,19 +28,30 @@ reviews:
         Flag inline comments that restate what the code does or describe a
         dependency's internals.
 
-        Anything behind the `dev` feature must stay feature-gated, and
-        libc usage must stay cfg(unix)-gated so non-Unix `dev` builds compile.
-        Do not suggest adding dependencies to a library crate without a
-        concrete reason; new deps are a cost to every downstream user.
+        This is a library that serves a Vite SPA from axum (embedded, from a
+        directory, or proxied to a spawned dev server). Public signatures are
+        semver-bound; flag breaking changes. Anything behind the `dev` feature
+        must stay feature-gated, and libc usage must stay cfg(unix)-gated so
+        non-Unix `dev` builds compile. Path handling in spa.rs and embed.rs
+        must not serve files outside the asset root. Do not suggest adding
+        dependencies without a concrete reason; new deps are a cost to every
+        downstream user. Formatting is rustfmt with tab_spaces = 2.
 
-        Formatting is rustfmt with tab_spaces = 2. Do not comment on style
-        that `cargo fmt` or `cargo clippy -- -D warnings` already enforces.
+        Do not comment on style that `cargo fmt` or
+        `cargo clippy --all-targets --all-features -- -D warnings` already
+        enforces.
     - path: "tests/**/*.rs"
       instructions: |
         Check that tests assert behavior rather than restating the
         implementation, and that new public API or bugfixes come with
         coverage. Both feature configurations matter: default and
         `--all-features`.
+    - path: ".github/workflows/**"
+      instructions: |
+        Every third-party action must be pinned to a full commit SHA with the
+        version in a trailing comment (`uses: owner/action@<sha> # vX.Y.Z`).
+        release.yml is hand-maintained: dist can't generate a release workflow for
+        a library crate, so don't suggest regenerating it. dist alone creates GitHub Releases (release-plz.toml keeps `git_release_enable = false`).
   auto_review:
     enabled: true
     drafts: false

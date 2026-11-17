@@ -2,13 +2,13 @@
 
 #![deny(missing_docs)]
 
-use crate::spa::names_a_file;
 use crate::SpaOptions;
+use crate::spa::names_a_file;
+use axum::Router;
 use axum::extract::Request;
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::Router;
 use std::path::PathBuf;
 use tower_http::services::{ServeDir, ServeFile};
 
