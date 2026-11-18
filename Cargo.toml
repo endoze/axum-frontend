@@ -11,6 +11,18 @@ documentation = "https://docs.rs/axum-frontend"
 rust-version = "1.88.0"
 keywords = ["axum", "vite", "frontend", "spa", "embed"]
 categories = ["web-programming", "web-programming::http-server", "development-tools"]
+# Repo tooling isn't part of the crate; keeping it out means CI-only changes
+# don't count as package changes and trigger a release.
+exclude = [
+  ".github/",
+  ".coderabbit.yaml",
+  ".gitignore",
+  "deny.toml",
+  "dist-workspace.toml",
+  "release-plz.toml",
+  "rustfmt.toml",
+  "tarpaulin.toml",
+]
 
 [features]
 default = []
