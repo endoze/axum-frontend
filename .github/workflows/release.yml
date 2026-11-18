@@ -1,126 +1,100 @@
-# CI that:
+# Creates the GitHub Release for a library crate.
 #
-# * checks for a Git Tag that looks like a release
-# * uses dist to create a GitHub Release with generated notes
+# The crate is a library, so dist runs announce-only: no binaries or
+# installers, just a GitHub Release whose title and notes come from
+# CHANGELOG.md. dist only selects a library when the tag it is given is
+# prefixed with the package name. release-plz.toml's `git_tag_name` already
+# emits `axum-frontend-v1.2.3`, so the plan step passes the pushed tag as-is.
 #
-# This crate is a *library*, so dist runs in "announce-only" mode: there are no
-# binaries or installers to build, so the only artifact is the GitHub Release
-# itself (title + notes derived from the changelog). dist requires an explicit,
-# name-prefixed tag to select a library, which is why the tag looks like
-# `axum-frontend-v1.2.3` (see release-plz.toml `git_tag_name`).
+# release-plz publishes to crates.io and pushes the version tag with a PAT so
+# this workflow fires. It does not create the GitHub Release itself
+# (git_release_enable = false), so dist is the only owner of releases.
 
 name: Release
 permissions:
   "contents": "write"
 
-# Triggered by the version tag that release-plz pushes after a release PR is
-# merged. release-plz publishes to crates.io and pushes this tag (with a PAT so
-# this workflow fires); it does NOT create the GitHub Release itself
-# (git_release_enable = false), so ownership of the release is unambiguous.
 on:
-  pull_request:
   push:
     tags:
       - '**[0-9]+.[0-9]+.[0-9]+*'
 
 env:
-  CARGO_DIST_VERSION: "0.32.0"
+  CARGO_DIST_VERSION: "0.34.0"
 
 jobs:
-  # Run 'dist host --steps=create' to determine what we're announcing.
   plan:
     runs-on: "ubuntu-22.04"
     outputs:
       val: ${{ steps.plan.outputs.manifest }}
-      tag: ${{ !github.event.pull_request && github.ref_name || '' }}
-      tag-flag: ${{ !github.event.pull_request && format('--tag={0}', github.ref_name) || '' }}
-      publishing: ${{ !github.event.pull_request }}
+      tag: ${{ github.ref_name }}
+      tag-flag: ${{ format('--tag={0}', github.ref_name) }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           submodules: recursive
       - name: Install dist
-        # we specify bash to get pipefail; it guards against the `curl` command
-        # failing. otherwise `sh` won't catch that `curl` returned non-0
+        # bash gives pipefail, so a failed curl fails the step.
         shell: bash
         run: |
           curl --proto '=https' --tlsv1.2 -LsSf "https://github.com/axodotdev/cargo-dist/releases/download/v${CARGO_DIST_VERSION}/cargo-dist-installer.sh" | sh
       - name: Cache dist
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cargo-dist-cache
           path: ~/.cargo/bin/dist
       - id: plan
         shell: bash
+        env:
+          DIST_TAG_FLAG: ${{ format('--tag={0}', github.ref_name) }}
         run: |
-          if [ -n "${{ !github.event.pull_request && github.ref_name || '' }}" ]; then
-            dist host --allow-dirty --steps=create ${{ format('--tag={0}', github.ref_name) }} --output-format=json > plan-dist-manifest.json
-            echo "dist ran successfully"
-            cat plan-dist-manifest.json
-            echo "manifest=$(jq -c "." plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
-          else
-            echo "not a tag push; dist plan skipped (library has no PR artifacts to build)"
-            echo "{}" > plan-dist-manifest.json
-          fi
+          dist host --allow-dirty --steps=create "$DIST_TAG_FLAG" --output-format=json > plan-dist-manifest.json
+          echo "dist ran successfully"
+          cat plan-dist-manifest.json
+          echo "manifest=$(jq -c "." plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
       - name: "Upload dist-manifest.json"
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: artifacts-plan-dist-manifest
           path: plan-dist-manifest.json
 
-  # Create the GitHub Release (only when publishing, i.e. a real tag push).
   host:
     needs:
       - plan
-    if: ${{ always() && needs.plan.outputs.publishing == 'true' && needs.plan.result == 'success' }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     runs-on: "ubuntu-22.04"
     outputs:
       val: ${{ steps.host.outputs.manifest }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           submodules: recursive
       - name: Install cached dist
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: cargo-dist-cache
           path: ~/.cargo/bin/
       - run: chmod +x ~/.cargo/bin/dist
-      # Fetch artifacts from scratch-storage
       - name: Fetch artifacts
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: artifacts-*
           path: target/distrib/
           merge-multiple: true
       - id: host
         shell: bash
+        env:
+          DIST_TAG_FLAG: ${{ needs.plan.outputs.tag-flag }}
         run: |
-          dist host ${{ needs.plan.outputs.tag-flag }} --steps=upload --steps=release --output-format=json > dist-manifest.json
+          dist host "$DIST_TAG_FLAG" --steps=upload --steps=release --output-format=json > dist-manifest.json
           echo "release computed successfully"
           cat dist-manifest.json
           echo "manifest=$(jq -c "." dist-manifest.json)" >> "$GITHUB_OUTPUT"
-      - name: "Upload dist-manifest.json"
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          # Overwrite the previous copy
-          name: artifacts-dist-manifest
-          path: dist-manifest.json
-      # Download all the artifacts so we can attach them to the release.
-      - name: "Download GitHub Artifacts"
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          pattern: artifacts-*
-          path: artifacts
-          merge-multiple: true
-      - name: Cleanup
-        run: |
-          # Remove the granular manifests
-          rm -f artifacts/*-dist-manifest.json
       - name: Create GitHub Release
         shell: bash
         env:
@@ -128,40 +102,17 @@ jobs:
           ANNOUNCEMENT_TITLE: "${{ fromJson(steps.host.outputs.manifest).announcement_title }}"
           ANNOUNCEMENT_BODY: "${{ fromJson(steps.host.outputs.manifest).announcement_github_body }}"
           RELEASE_COMMIT: "${{ github.sha }}"
+          RELEASE_TAG: "${{ needs.plan.outputs.tag }}"
         run: |
-          # Write and read notes from a file to avoid quoting breaking things
           echo "$ANNOUNCEMENT_BODY" > "$RUNNER_TEMP/notes.txt"
-
-          # This is a library: there may be zero release assets. nullglob keeps
-          # an empty `artifacts/*` from being passed to gh as a literal path.
-          shopt -s nullglob
-          ASSETS=(artifacts/*)
 
           FLAGS=()
           if [ "$IS_PRERELEASE" = "true" ]; then
             FLAGS+=(--prerelease)
           fi
 
-          gh release create "${{ needs.plan.outputs.tag }}" \
+          gh release create "$RELEASE_TAG" \
             --target "$RELEASE_COMMIT" \
             "${FLAGS[@]}" \
             --title "$ANNOUNCEMENT_TITLE" \
-            --notes-file "$RUNNER_TEMP/notes.txt" \
-            "${ASSETS[@]}"
-
-  announce:
-    needs:
-      - plan
-      - host
-    # use "always() && ..." to allow us to wait for all publish jobs while
-    # still allowing individual publish jobs to skip themselves (for prereleases).
-    # "host" however must run to completion, no skipping allowed!
-    if: ${{ always() && needs.host.result == 'success' }}
-    runs-on: "ubuntu-22.04"
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          submodules: recursive
-      - run: echo "Announced release ${{ needs.plan.outputs.tag }}"
+            --notes-file "$RUNNER_TEMP/notes.txt"

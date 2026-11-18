@@ -1,9 +1,9 @@
 #![cfg(feature = "dev")]
 
+use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::routing::get;
-use axum::Router;
 use std::time::Duration;
 use tower::ServiceExt;
 
@@ -488,7 +488,7 @@ fn signal_self(signal: &str) {
 #[cfg(unix)]
 #[tokio::test]
 async fn shutdown_requested_resolves_on_sigint_and_sigterm() {
-  use tokio::signal::unix::{signal, SignalKind};
+  use tokio::signal::unix::{SignalKind, signal};
 
   // Registering up front is what makes signalling ourselves survivable: until
   // tokio installs a handler, `SIGINT`'s default disposition kills the whole test

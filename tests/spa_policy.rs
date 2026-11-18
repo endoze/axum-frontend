@@ -1,12 +1,12 @@
 //! The same request matrix against the embedded and on-disk sources.
 
+use axum::Router;
 use axum::body::Body;
-use axum::http::{header, HeaderName, HeaderValue, Method, Request, StatusCode};
+use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode, header};
 use axum::response::Response;
 use axum::routing::get;
-use axum::Router;
 use axum_frontend::{
-  embed_router, embed_router_with, static_router, static_router_with, SpaOptions,
+  SpaOptions, embed_router, embed_router_with, static_router, static_router_with,
 };
 use std::path::PathBuf;
 use tower::ServiceExt;

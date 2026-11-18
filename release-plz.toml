@@ -1,11 +1,29 @@
 [workspace]
-# release-plz publishes to crates.io and pushes the git tag, but the GitHub
-# Release is created by cargo-dist (see .github/workflows/release.yml). Disable
-# release-plz's own GitHub release so the two tools don't race to create the
-# same release for a tag.
+changelog_update = true
+# Dependabot (with a cooldown) owns dependency updates; release PRs only release.
+dependencies_update = false
+git_tag_enable = true
+# dist's release.yml owns the GitHub Release; release-plz only tags.
 git_release_enable = false
+pr_labels = ["release"]
+allow_dirty = false
+publish_allow_dirty = false
+semver_check = false
 
 # cargo-dist can only "announce" a library (no binaries) when given an explicit,
 # name-prefixed tag. Emit exactly that tag here so release.yml can pass
 # github.ref_name straight to `dist host --tag=...`.
 git_tag_name = "{{ package }}-v{{ version }}"
+
+[changelog]
+# release-plz's default parsers, plus skips for Dependabot's grouped bumps.
+commit_parsers = [
+  { message = "^chore\\(deps\\)", skip = true },
+  { message = "^ci\\(deps\\)", skip = true },
+  { message = "^feat", group = "added" },
+  { message = "^changed", group = "changed" },
+  { message = "^deprecated", group = "deprecated" },
+  { message = "^fix", group = "fixed" },
+  { message = "^security", group = "security" },
+  { message = "^.*", group = "other" },
+]

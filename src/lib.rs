@@ -15,7 +15,7 @@ pub use static_dir::{static_router, static_router_with};
 #[cfg(feature = "dev")]
 mod dev;
 #[cfg(feature = "dev")]
-pub use dev::{dev_router, shutdown_requested, wait_until_ready, DevConfig, DevServer};
+pub use dev::{DevConfig, DevServer, dev_router, shutdown_requested, wait_until_ready};
 
 #[cfg(test)]
 mod tests {

@@ -186,7 +186,7 @@ async fn port_is_taken(host: &str, port: u16) -> bool {
 pub async fn shutdown_requested() {
   #[cfg(unix)]
   {
-    use tokio::signal::unix::{signal, SignalKind};
+    use tokio::signal::unix::{SignalKind, signal};
 
     let Ok(mut terminate) = signal(SignalKind::terminate()) else {
       let _ = tokio::signal::ctrl_c().await;
