@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/endoze/axum-frontend/compare/axum-frontend-v0.2.0...axum-frontend-v0.2.1) - 2026-11-18
+
+### Other
+
+- maintenance pass for dependencies, CI, and release tooling
+
 ## [0.2.0](https://github.com/endoze/axum-frontend/compare/axum-frontend-v0.1.3...axum-frontend-v0.2.0) - 2026-11-07
 
 ### Added
